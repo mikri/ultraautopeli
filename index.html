@@ -368,8 +368,8 @@ wheelEl.addEventListener('pointercancel', wheelRelease);
 // Puhelinta pidetään vaakatasossa (näyttö ylöspäin) ja kallistetaan vasemmalle tai oikealle.
 // Kallistuskulma luetaan deviceorientation-tapahtumasta (beta/gamma), joka toimii samoin iPhonessa ja Androidissa.
 // Kalibrointi tallentaa suoran asennon; ero siihen on ohjauskulma.
-const TILT_FULL_DEG = 30;  // näin monen asteen kallistus = täysi ohjaus
-const TILT_DEADZONE = 2;   // pieni tärinä ei ohjaa
+const TILT_FULL_DEG = 40;  // näin monen asteen kallistus = täysi ohjaus
+const TILT_DEADZONE = 3;   // pieni tärinä ei ohjaa
 const tilt = { enabled: false, raw: null, smooth: null, zero: null, input: 0, lastEvent: 0 };
 const tiltStateEl = document.getElementById('tiltState');
 const calibBtn = document.getElementById('calib');
@@ -420,7 +420,9 @@ function tiltInput() {
   let d = angleDiff(tilt.smooth, tilt.zero);
   // Oikea reuna alempana antaa negatiivisen kulman = oikealle
   if (Math.abs(d) < TILT_DEADZONE) d = 0; else d -= Math.sign(d) * TILT_DEADZONE;
-  return Math.max(-1, Math.min(1, d / (TILT_FULL_DEG - TILT_DEADZONE)));
+  const x = Math.max(-1, Math.min(1, d / (TILT_FULL_DEG - TILT_DEADZONE)));
+  // Käyrä: pienet kallistukset ohjaavat vähän, isot enemmän
+  return Math.sign(x) * Math.pow(Math.abs(x), 1.4);
 }
 
 // Aloitusnappi: lupa, koko näyttö ja vaakasuunta (jos selain sallii)
@@ -492,8 +494,8 @@ function update(dt) {
   state.speed = Math.max(-MAX_REVERSE, Math.min(spec.max, state.speed));
 
   // Ohjaus pehmeästi, kovassa vauhdissa vähemmän kääntökulmaa
-  const target = steerInput() * spec.steer * (1 - Math.min(Math.abs(state.speed) / 40, 1) * 0.6);
-  state.steer += (target - state.steer) * Math.min(1, dt * 8);
+  const target = steerInput() * spec.steer * (1 - Math.min(Math.abs(state.speed) / 35, 1) * 0.7);
+  state.steer += (target - state.steer) * Math.min(1, dt * 5);
 
   // Polkupyörämalli
   state.heading += state.speed / WHEELBASE * Math.tan(state.steer) * dt;
