@@ -73,12 +73,13 @@
 <div id="hud">
   <div class="row"><div id="limit">40</div><div id="speed">0 <small>km/h</small></div></div>
   <div id="fines">Sakot: 0 €</div>
-  <div id="help">Välilyönti: kaasu · Shift: jarru (pysähtyneenä peruutus) · ← → tai A D: käännä · R: alkuun</div>
+  <div id="help">Välilyönti: kaasu · Shift: jarru (pysähtyneenä peruutus) · ← → tai A D: käännä · R: alkuun · L: rajoitin</div>
   <div id="tiltState"></div>
 </div>
 <div id="toast"></div>
 <div id="topbar">
   <button id="calib" hidden>Kalibroi</button>
+  <button id="limiterBtn">Rajoitin: pois</button>
   <button id="menuBtn">Valikko</button>
   <button id="resetBtn">Alkuun</button>
 </div>
@@ -481,9 +482,34 @@ const BRAKE = 22, DRAG = 0.6, ROLL = 2.5;
 const WHEELBASE = 2.6;
 const CAR_RADIUS = 1.6;
 
+// ---------- Nopeudenrajoitin ----------
+// pois, auto (= voimassa oleva nopeusrajoitus) tai kiinteä km/h
+const LIMITER_OPTS = ['pois', 'auto', 40, 60, 80, 100, 120];
+let limiterIdx = 0;
+try { limiterIdx = Math.max(0, LIMITER_OPTS.indexOf(JSON.parse(localStorage.getItem('ua-limiter')))); } catch (e) {}
+const limiterBtn = document.getElementById('limiterBtn');
+function limiterSpeed() {
+  const o = LIMITER_OPTS[limiterIdx];
+  if (o === 'pois') return null;
+  return (o === 'auto' ? currentLimit : o) / 3.6;
+}
+function renderLimiter() {
+  const o = LIMITER_OPTS[limiterIdx];
+  limiterBtn.textContent = 'Rajoitin: ' + (o === 'pois' ? 'pois' : o === 'auto' ? 'auto' : o + ' km/h');
+  limiterBtn.style.background = o === 'pois' ? '' : 'rgba(42,157,143,.8)';
+}
+function cycleLimiter() {
+  limiterIdx = (limiterIdx + 1) % LIMITER_OPTS.length; renderLimiter();
+  try { localStorage.setItem('ua-limiter', JSON.stringify(LIMITER_OPTS[limiterIdx])); } catch (e) {}
+}
+limiterBtn.addEventListener('click', cycleLimiter);
+addEventListener('keydown', e => { if (e.code === 'KeyL') cycleLimiter(); });
+renderLimiter();
+
 // Kaasu nousee pehmeästi: painalluksen alussa vain osa tehosta, täysi teho noin 1,5 s:n päästä
 let throttle = 0;
 function update(dt) {
+  const prevSpeed = state.speed;
   throttle = keys.up ? Math.min(1, Math.max(0.25, throttle) + dt * 0.5) : 0;
   // Kaasu, jarru ja peruutus
   if (keys.brake) state.speed -= Math.sign(state.speed) * Math.min(Math.abs(state.speed), BRAKE * dt);
@@ -492,6 +518,9 @@ function update(dt) {
   else state.speed -= Math.sign(state.speed) * Math.min(Math.abs(state.speed), ROLL * dt);
   state.speed -= state.speed * DRAG * 0.02 * dt * Math.abs(state.speed) / 10;
   state.speed = Math.max(-MAX_REVERSE, Math.min(spec.max, state.speed));
+  // Nopeudenrajoitin: kaasu katkeaa asetetussa nopeudessa
+  const lim = limiterSpeed();
+  if (lim != null && state.speed > lim) state.speed = Math.max(lim, Math.min(state.speed, prevSpeed) - BRAKE * 0.3 * dt);
 
   // Ohjaus pehmeästi, kovassa vauhdissa vähemmän kääntökulmaa
   const target = steerInput() * spec.steer * (1 - Math.min(Math.abs(state.speed) / 35, 1) * 0.7);

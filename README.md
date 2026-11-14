@@ -20,6 +20,7 @@ Peli on PWA, joten sen voi lisätä puhelimen kotinäytölle omalla kuvakkeellaa
 - Sakko tulee, jos ajat päin punaisia tai ajat yli 10 km/h ylinopeutta yli 2 sekunnin ajan. Jokainen sakko on 60 €.
 - Kaduilla ajaa muita autoja, jotka pysähtyvät punaisiin valoihin ja kääntyilevät risteyksissä.
 - Moottoritie: loputon moottoritie metsän halki, liikennettä molempiin suuntiin, rajoitus 120 km/h.
+- Nopeudenrajoitin (Rajoitin-nappi tai L-näppäin): pois, auto (noudattaa voimassa olevaa rajoitusta) tai 40–120 km/h.
 - Peli toimii vain vaakasuunnassa.
 
 ## Ohjaus
