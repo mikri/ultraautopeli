@@ -4,12 +4,28 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
 <title>UltraAutopeli</title>
+<link rel="manifest" href="manifest.webmanifest">
+<meta name="theme-color" content="#1b4f9c">
+<link rel="icon" href="icons/icon-192.png">
+<link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="UltraAutopeli">
 <style>
   html, body { margin: 0; height: 100%; overflow: hidden; background: #8fc7ff; font-family: system-ui, sans-serif; touch-action: none; user-select: none; -webkit-user-select: none; }
   canvas { display: block; }
   #hud { position: fixed; top: 12px; left: 12px; color: #fff; text-shadow: 0 1px 3px rgba(0,0,0,.6); pointer-events: none; }
   #speed { font-size: 40px; font-weight: 800; line-height: 1; }
   #speed small { font-size: 16px; font-weight: 600; }
+  .row { display: flex; align-items: center; gap: 10px; }
+  #limit { width: 44px; height: 44px; border-radius: 50%; background: #fff; border: 6px solid #d62828; color: #111; font: 800 18px system-ui, sans-serif; display: flex; align-items: center; justify-content: center; text-shadow: none; box-sizing: content-box; }
+  #limit.over { animation: blink .4s steps(2) infinite; }
+  @keyframes blink { 50% { background: #ffd6d6; } }
+  #fines { margin-top: 6px; font-size: 20px; font-weight: 800; }
+  #toast { position: fixed; top: 18%; left: 50%; transform: translateX(-50%) scale(.8); background: #c1121f; color: #fff; font: 800 22px system-ui, sans-serif; padding: 12px 22px; border-radius: 14px; box-shadow: 0 6px 20px rgba(0,0,0,.4); opacity: 0; transition: opacity .2s, transform .2s; pointer-events: none; text-align: center; white-space: nowrap; }
+  #toast.show { opacity: 1; transform: translateX(-50%) scale(1); }
+  #toast small { display: block; font-size: 15px; font-weight: 600; opacity: .9; }
   #help { margin-top: 6px; font-size: 13px; opacity: .9; }
   .pad { position: fixed; bottom: 16px; right: 16px; display: flex; gap: 14px; align-items: flex-end; }
   .btn { width: 84px; height: 110px; border-radius: 16px; background: rgba(0,0,0,.4); color: #fff; font-size: 17px; font-weight: 700; display: flex; align-items: center; justify-content: center; border: 2px solid rgba(255,255,255,.5); }
@@ -27,18 +43,25 @@
   #wheel { position: fixed; left: 20px; bottom: 20px; width: 170px; height: 170px; touch-action: none; cursor: grab; filter: drop-shadow(0 3px 6px rgba(0,0,0,.45)); }
   #wheel.drag { cursor: grabbing; }
   @media (pointer: coarse) { #help { display: none; } }
+  #rotate { display: none; position: fixed; inset: 0; z-index: 20; background: #0d1b2a; color: #fff; flex-direction: column; align-items: center; justify-content: center; gap: 16px; font: 700 22px system-ui, sans-serif; text-align: center; padding: 24px; }
+  #rotate .phone { width: 60px; height: 100px; border: 5px solid #fff; border-radius: 12px; animation: turn 2s ease-in-out infinite; }
+  @keyframes turn { 0%, 30% { transform: rotate(0); } 60%, 100% { transform: rotate(-90deg); } }
+  @media (pointer: coarse) and (orientation: portrait) { #rotate { display: flex; } }
 </style>
 </head>
 <body>
 <div id="hud">
-  <div id="speed">0 <small>km/h</small></div>
+  <div class="row"><div id="limit">40</div><div id="speed">0 <small>km/h</small></div></div>
+  <div id="fines">Sakot: 0 €</div>
   <div id="help">Välilyönti: kaasu · Shift: jarru (pysähtyneenä peruutus) · ← → tai A D: käännä · R: alkuun</div>
   <div id="tiltState"></div>
 </div>
+<div id="toast"></div>
 <div id="topbar">
   <button id="calib" hidden>Kalibroi</button>
   <button id="resetBtn">Alkuun</button>
 </div>
+<div id="rotate"><div class="phone"></div>Käännä puhelin vaakasuuntaan</div>
 <div id="start">
   <h1>UltraAutopeli</h1>
   <p>Puhelimella: käännä puhelin vaakasuuntaan ja pidä sitä vaakatasossa näyttö ylöspäin. Kallista vasemmalle tai oikealle kääntääksesi. Aloitushetken asento on suora. Kaasu ja jarru ovat oikeassa reunassa.</p>
@@ -200,28 +223,32 @@ function addWindows(mesh, w, h, d) {
 }
 
 // ---------- Auto ----------
-const car = new THREE.Group();
-(function buildCar() {
-  const body = new THREE.Mesh(new THREE.BoxGeometry(2, 0.8, 4.2), new THREE.MeshLambertMaterial({ color: 0xd62828 }));
-  body.position.y = 0.75; body.castShadow = true;
-  const cabin = new THREE.Mesh(new THREE.BoxGeometry(1.7, 0.7, 2.1), new THREE.MeshLambertMaterial({ color: 0x22313f }));
-  cabin.position.set(0, 1.5, -0.2); cabin.castShadow = true;
-  car.add(body, cabin);
-  const lightMat = new THREE.MeshBasicMaterial({ color: 0xfff6c0 });
-  const tailMat = new THREE.MeshBasicMaterial({ color: 0xff3030 });
+const wheelGeo = new THREE.CylinderGeometry(0.4, 0.4, 0.3, 14); wheelGeo.rotateZ(Math.PI / 2);
+const wheelMat = new THREE.MeshLambertMaterial({ color: 0x111111 });
+const cabinMat = new THREE.MeshLambertMaterial({ color: 0x22313f });
+const headMat = new THREE.MeshBasicMaterial({ color: 0xfff6c0 });
+const tailMat = new THREE.MeshBasicMaterial({ color: 0xff3030 });
+const bodyGeo = new THREE.BoxGeometry(2, 0.8, 4.2), cabinGeo = new THREE.BoxGeometry(1.7, 0.7, 2.1), lampGeo = new THREE.BoxGeometry(0.4, 0.2, 0.05);
+function makeCar(color, shadows) {
+  const g = new THREE.Group();
+  const body = new THREE.Mesh(bodyGeo, new THREE.MeshLambertMaterial({ color }));
+  body.position.y = 0.75; body.castShadow = shadows;
+  const cabin = new THREE.Mesh(cabinGeo, cabinMat);
+  cabin.position.set(0, 1.5, -0.2); cabin.castShadow = shadows;
+  g.add(body, cabin);
   for (const sx of [-0.65, 0.65]) {
-    const hl = new THREE.Mesh(new THREE.BoxGeometry(0.4, 0.2, 0.05), lightMat); hl.position.set(sx, 0.85, 2.11); car.add(hl);
-    const tl = new THREE.Mesh(new THREE.BoxGeometry(0.4, 0.2, 0.05), tailMat); tl.position.set(sx, 0.85, -2.11); car.add(tl);
+    const hl = new THREE.Mesh(lampGeo, headMat); hl.position.set(sx, 0.85, 2.11); g.add(hl);
+    const tl = new THREE.Mesh(lampGeo, tailMat); tl.position.set(sx, 0.85, -2.11); g.add(tl);
   }
-  const wheelGeo = new THREE.CylinderGeometry(0.4, 0.4, 0.3, 14); wheelGeo.rotateZ(Math.PI / 2);
-  const wheelMat = new THREE.MeshLambertMaterial({ color: 0x111111 });
-  car.userData.wheels = [];
+  g.userData.wheels = [];
   for (const [x, z] of [[-1, 1.3], [1, 1.3], [-1, -1.3], [1, -1.3]]) {
     const pivot = new THREE.Group(); pivot.position.set(x, 0.4, z);
     const wheel = new THREE.Mesh(wheelGeo, wheelMat); pivot.add(wheel);
-    car.add(pivot); car.userData.wheels.push({ pivot, wheel, front: z > 0 });
+    g.add(pivot); g.userData.wheels.push({ pivot, wheel, front: z > 0 });
   }
-})();
+  return g;
+}
+const car = makeCar(0xd62828, true);
 scene.add(car);
 
 // Auton tila
@@ -292,13 +319,13 @@ function sideTilt(beta, gamma) {
   const a = ((screenAngle() % 360) + 360) % 360;
   if (a === 90) return -beta;    // vaakasuunta, laitteen yläreuna vasemmalla
   if (a === 270) return beta;    // vaakasuunta toisin päin
-  if (a === 180) return gamma;   // pysty, ylösalaisin
-  return -gamma;                 // pysty
+  return null;                   // pystyasennossa ei ohjata: peli toimii vain vaakasuunnassa
 }
 
 function onOrientation(e) {
   if (e.beta == null || e.gamma == null) return;
   const deg = sideTilt(e.beta, e.gamma);
+  if (deg == null) { tilt.smooth = null; tilt.zero = null; return; }
   tilt.raw = deg;
   tilt.smooth = tilt.smooth == null ? deg : tilt.smooth + angleDiff(deg, tilt.smooth) * 0.35;
   if (tilt.zero == null) tilt.zero = tilt.smooth;
@@ -315,7 +342,7 @@ async function startTilt() {
     if (typeof DeviceOrientationEvent === 'undefined') return;
     if (typeof DeviceOrientationEvent.requestPermission === 'function') {
       const res = await DeviceOrientationEvent.requestPermission(); // iPhone vaatii luvan
-      if (res !== 'granted') { tiltStateEl.textContent = 'Liikeanturin lupa evättiin: käytä rattia'; return; }
+      if (res !== 'granted') { if (matchMedia('(pointer: coarse)').matches) tiltStateEl.textContent = 'Liikeanturin lupa evättiin: käytä rattia'; return; }
     }
     addEventListener('deviceorientation', onOrientation);
   } catch (err) {
@@ -333,6 +360,7 @@ function tiltInput() {
 // Aloitusnappi: lupa, koko näyttö ja vaakasuunta (jos selain sallii)
 document.getElementById('startBtn').addEventListener('click', async () => {
   document.getElementById('start').style.display = 'none';
+  try { audioCtx = new (window.AudioContext || window.webkitAudioContext)(); } catch (e) {}
   startTilt(); // ensin, koska luvan pyyntö vaatii tuoreen napautuksen
   const coarse = matchMedia('(pointer: coarse)').matches;
   if (coarse) {
@@ -408,6 +436,286 @@ function update(dt) {
   }
 }
 
+
+// ---------- Liikenne: valot, rajoitukset, sakot ja muut autot ----------
+const LANE = ROAD / 4;                       // kaistan keskikohta kadun keskiviivasta
+const roadLine = k => -HALF + k * CELL;      // k:nnen kadun keskiviiva
+const nearestK = v => Math.round((v + HALF) / CELL);
+// Pääkadut (keskikadut ja reunakadut) 60 km/h, muut 40 km/h
+const streetLimit = k => (k === GRID / 2 || k === 0 || k === GRID) ? 60 : 40;
+
+// Liikennevalojen vaiheet (s): pohjois-etelä vihreä, keltainen, kaikki punaisella, itä-länsi samoin
+const CYCLE = 22;
+function lightState(inter, axis, t) {
+  if (!inter.hasLight) return 'green';
+  const c = (t + inter.offset) % CYCLE;
+  const g0 = axis === 'z' ? 0 : 11;
+  if (c >= g0 && c < g0 + 8) return 'green';
+  if (c >= g0 + 8 && c < g0 + 10) return 'yellow';
+  return 'red';
+}
+function interAt(kx, kz) { return intersections[kx * (GRID + 1) + kz]; }
+intersections.forEach((it, idx) => {
+  it.kx = Math.floor(idx / (GRID + 1)); it.kz = idx % (GRID + 1);
+  it.hasLight = it.kx > 0 && it.kx < GRID && it.kz > 0 && it.kz < GRID;
+  it.offset = rnd() * CYCLE;
+  it.heads = { z: [], x: [] };
+  it.shown = {};
+});
+
+// Suunnat: liikesuunta (dx, dz) ja kulma
+const DIRS = [
+  { dx: 0, dz: 1, axis: 'z', h: 0 }, { dx: 1, dz: 0, axis: 'x', h: Math.PI / 2 },
+  { dx: 0, dz: -1, axis: 'z', h: Math.PI }, { dx: -1, dz: 0, axis: 'x', h: -Math.PI / 2 },
+];
+// Oikea puoli liikesuunnasta katsottuna (oikeanpuoleinen liikenne)
+const rightOf = d => ({ x: -d.dz, z: d.dx });
+
+const lampOff = { red: new THREE.MeshBasicMaterial({ color: 0x3a1010 }), yellow: new THREE.MeshBasicMaterial({ color: 0x3a3010 }), green: new THREE.MeshBasicMaterial({ color: 0x0f3a14 }) };
+const lampOn = { red: new THREE.MeshBasicMaterial({ color: 0xff2a2a }), yellow: new THREE.MeshBasicMaterial({ color: 0xffc400 }), green: new THREE.MeshBasicMaterial({ color: 0x2bff5a }) };
+const poleMat = new THREE.MeshLambertMaterial({ color: 0x30343a });
+const poleGeo = new THREE.CylinderGeometry(0.12, 0.12, 4.6, 8);
+const headGeo = new THREE.BoxGeometry(0.6, 1.7, 0.4);
+const lampGeo2 = new THREE.CircleGeometry(0.2, 12);
+const stopGeo = new THREE.PlaneGeometry(ROAD / 2 - 0.4, 0.5);
+
+function makeSignTex(n) {
+  const c = document.createElement('canvas'); c.width = c.height = 128;
+  const g = c.getContext('2d');
+  g.fillStyle = '#d62828'; g.beginPath(); g.arc(64, 64, 62, 0, Math.PI * 2); g.fill();
+  g.fillStyle = '#fff'; g.beginPath(); g.arc(64, 64, 46, 0, Math.PI * 2); g.fill();
+  g.fillStyle = '#111'; g.font = 'bold 54px system-ui, sans-serif'; g.textAlign = 'center'; g.textBaseline = 'middle'; g.fillText(n, 64, 68);
+  return new THREE.CanvasTexture(c);
+}
+const signMats = { 40: new THREE.MeshBasicMaterial({ map: makeSignTex(40), transparent: true }), 60: new THREE.MeshBasicMaterial({ map: makeSignTex(60), transparent: true }) };
+const signGeo = new THREE.CircleGeometry(0.6, 20);
+const signPoleGeo = new THREE.CylinderGeometry(0.06, 0.06, 2.6, 6);
+
+for (const it of intersections) {
+  for (const d of DIRS) {
+    const r = rightOf(d);
+    // Valotolppa risteyksen jälkeen oikealla puolella, valot kohti tulevaa autoa
+    if (it.hasLight) {
+      const px = it.x + d.dx * (ROAD / 2 + 0.8) + r.x * (ROAD / 2 + 0.8);
+      const pz = it.z + d.dz * (ROAD / 2 + 0.8) + r.z * (ROAD / 2 + 0.8);
+      const pole = new THREE.Mesh(poleGeo, poleMat); pole.position.set(px, 2.3, pz); scene.add(pole);
+      const head = new THREE.Group(); head.position.set(px, 4.4, pz); head.rotation.y = d.h + Math.PI;
+      head.add(new THREE.Mesh(headGeo, poleMat));
+      const lamps = {};
+      ['red', 'yellow', 'green'].forEach((col, i) => {
+        const l = new THREE.Mesh(lampGeo2, lampOff[col]); l.position.set(0, 0.52 - i * 0.52, 0.21); head.add(l); lamps[col] = l;
+      });
+      scene.add(head);
+      it.heads[d.axis].push(lamps);
+      buildings.push({ minX: px - 0.2, maxX: px + 0.2, minZ: pz - 0.2, maxZ: pz + 0.2 });
+      // Pysäytysviiva ennen risteystä omalla kaistalla
+      const sl = new THREE.Mesh(stopGeo, lineMat);
+      sl.rotation.x = -Math.PI / 2; sl.rotation.z = -d.h;
+      sl.position.set(it.x - d.dx * (ROAD / 2 + 0.6) + r.x * ROAD / 4, 0.03, it.z - d.dz * (ROAD / 2 + 0.6) + r.z * ROAD / 4);
+      scene.add(sl);
+    }
+    // Nopeusrajoitusmerkki risteyksen jälkeen, jos kadulla on jatkoa
+    const nk = { x: it.kx + d.dx, z: it.kz + d.dz };
+    if (nk.x < 0 || nk.x > GRID || nk.z < 0 || nk.z > GRID) continue;
+    const lim = streetLimit(d.axis === 'z' ? it.kx : it.kz);
+    const sx = it.x + d.dx * (ROAD / 2 + 7) + r.x * (ROAD / 2 + 0.8);
+    const sz = it.z + d.dz * (ROAD / 2 + 7) + r.z * (ROAD / 2 + 0.8);
+    const sp = new THREE.Mesh(signPoleGeo, poleMat); sp.position.set(sx, 1.3, sz); scene.add(sp);
+    const sign = new THREE.Mesh(signGeo, signMats[lim]); sign.position.set(sx, 2.6, sz); sign.rotation.y = d.h + Math.PI; scene.add(sign);
+    const back = new THREE.Mesh(signGeo, poleMat); back.position.set(sx, 2.6, sz); back.rotation.y = d.h; scene.add(back);
+  }
+}
+
+let simTime = 0;
+let lastPhaseKey = '';
+function updateLights() {
+  for (const it of intersections) {
+    if (!it.hasLight) continue;
+    for (const axis of ['z', 'x']) {
+      const st = lightState(it, axis, simTime);
+      const key = axis + st;
+      if (it.shown[axis] === key) continue;
+      it.shown[axis] = key;
+      for (const lamps of it.heads[axis]) for (const col of ['red', 'yellow', 'green']) lamps[col].material = col === st ? lampOn[col] : lampOff[col];
+    }
+  }
+}
+
+// --- Sakot ---
+const fines = { total: 0, count: 0 };
+const finesEl = document.getElementById('fines');
+const limitEl = document.getElementById('limit');
+const toastEl = document.getElementById('toast');
+let toastTimer = 0, audioCtx = null;
+function beep() {
+  try {
+    if (!audioCtx) return;
+    const o = audioCtx.createOscillator(), g = audioCtx.createGain();
+    o.type = 'square'; o.connect(g); g.connect(audioCtx.destination);
+    const t = audioCtx.currentTime;
+    o.frequency.setValueAtTime(960, t); o.frequency.setValueAtTime(720, t + 0.18); o.frequency.setValueAtTime(960, t + 0.36); o.frequency.setValueAtTime(720, t + 0.54);
+    g.gain.setValueAtTime(0.08, t); g.gain.setValueAtTime(0, t + 0.72);
+    o.start(t); o.stop(t + 0.75);
+  } catch (e) {}
+}
+function giveFine(reason, amount) {
+  fines.total += amount; fines.count++;
+  finesEl.textContent = 'Sakot: ' + fines.total + ' €';
+  toastEl.innerHTML = '🚨 SAKKO ' + amount + ' €<small>' + reason + '</small>';
+  toastEl.classList.add('show'); toastTimer = 2.5;
+  beep();
+}
+let currentLimit = 40, overTime = 0, speedFineCooldown = 0, lastInter = null;
+function updateRules(dt) {
+  const kx = nearestK(state.x), kz = nearestK(state.z);
+  const onNS = Math.abs(state.x - roadLine(kx)) < ROAD / 2;
+  const onEW = Math.abs(state.z - roadLine(kz)) < ROAD / 2;
+  if (onNS && !onEW) currentLimit = streetLimit(kx);
+  else if (onEW && !onNS) currentLimit = streetLimit(kz);
+  limitEl.textContent = currentLimit;
+
+  // Ylinopeus: yli 5 km/h liian lujaa yli sekunnin ajan
+  const kmh = Math.abs(state.speed) * 3.6;
+  const over = kmh - currentLimit;
+  limitEl.classList.toggle('over', over > 5);
+  speedFineCooldown -= dt;
+  if (over > 5) { overTime += dt; } else overTime = 0;
+  if (overTime > 1 && speedFineCooldown <= 0) {
+    giveFine('Ylinopeus ' + Math.round(kmh) + ' km/h (rajoitus ' + currentLimit + ')', 50 + Math.round(over) * 10);
+    speedFineCooldown = 6;
+  }
+
+  // Punaisia päin: auto ajaa risteykseen, kun sen suunnan valo on punainen
+  const inside = onNS && onEW ? interAt(kx, kz) : null;
+  if (inside && inside !== lastInter && inside.hasLight && state.speed > 2) {
+    const axis = Math.abs(Math.sin(state.heading)) > Math.abs(Math.cos(state.heading)) ? 'x' : 'z';
+    if (lightState(inside, axis, simTime) === 'red') giveFine('Ajoit päin punaisia', 200);
+  }
+  lastInter = inside;
+
+  if (toastTimer > 0) { toastTimer -= dt; if (toastTimer <= 0) toastEl.classList.remove('show'); }
+}
+
+// --- Muut autot ---
+const AI_COUNT = 40;
+const AI_COLORS = [0x2a6fdb, 0xf4f4f4, 0x222222, 0x8a8f98, 0x2e9e5b, 0xf2b705, 0x7b3fa0, 0x1b998b, 0xe07a5f];
+const aiCars = [];
+// Auto ajaa kaistaa pitkin: line = kadun indeksi, d = suunta, pos = sijainti kulkuakselilla
+function laneCoord(line, d) { const r = rightOf(d); return roadLine(line) + (d.axis === 'z' ? r.x : r.z) * LANE; }
+function spawnAI(a) {
+  for (let tries = 0; tries < 20; tries++) {
+    const d = DIRS[Math.floor(rnd() * 4)];
+    const line = Math.floor(rnd() * (GRID + 1));
+    const pos = -HALF + ROAD + rnd() * (CITY - 2 * ROAD);
+    const x = d.axis === 'z' ? laneCoord(line, d) : pos;
+    const z = d.axis === 'z' ? pos : laneCoord(line, d);
+    if (Math.hypot(x - state.x, z - state.z) < 40) continue;
+    if (aiCars.some(o => o !== a && Math.hypot(o.x - x, o.z - z) < 10)) continue;
+    Object.assign(a, { d, line, x, z, speed: 0, yaw: d.h, plan: null, bump: 0 });
+    planTurn(a);
+    return;
+  }
+}
+// Valitsee, mitä seuraavassa risteyksessä tehdään: suoraan, vasemmalle tai oikealle
+function planTurn(a) {
+  const along = a.d.axis === 'z' ? a.z : a.x;
+  const dirSign = a.d.axis === 'z' ? a.d.dz : a.d.dx;
+  let k = nearestK(along);
+  if ((roadLine(k) - along) * dirSign < ROAD / 2 + 1) k += dirSign; // seuraava risteys edessä
+  if (k < 0 || k > GRID) { a.plan = { k: null }; return; }
+  const di = DIRS.indexOf(a.d);
+  const options = [];
+  // Jatkaminen suoraan onnistuu, jos risteyksen takana on katua
+  if (k + dirSign >= 0 && k + dirSign <= GRID) options.push({ turn: 0, w: 6 });
+  for (const turn of [1, 3]) { // 1 = vasemmalle, 3 = oikealle
+    const nd = DIRS[(di + turn) % 4];
+    const ns = nd.axis === 'z' ? nd.dz : nd.dx;
+    if (a.line + ns >= 0 && a.line + ns <= GRID) options.push({ turn, nd, w: 2 });
+  }
+  let sum = options.reduce((s, o) => s + o.w, 0), r = rnd() * sum;
+  let pick = options[0];
+  for (const o of options) { if ((r -= o.w) < 0) { pick = o; break; } }
+  if (!pick || pick.turn === 0) { a.plan = { k, turn: 0 }; return; }
+  // Kääntöpiste: nykyisen kaistan ja uuden kaistan leikkauskohta
+  const turnAt = laneCoord(k, pick.nd);
+  a.plan = { k, turn: pick.turn, nd: pick.nd, turnAt, newLine: k };
+}
+function aiObstacle(a, fx, fz) {
+  // Lähin este omalla kaistalla edessä: muut autot ja pelaaja
+  let best = Infinity;
+  const check = (x, z) => {
+    const dx = x - a.x, dz = z - a.z;
+    const fwd = dx * fx + dz * fz, lat = Math.abs(dx * fz - dz * fx);
+    if (fwd > 0 && fwd < 30 && lat < 2.2) best = Math.min(best, fwd);
+  };
+  for (const o of aiCars) if (o !== a) check(o.x, o.z);
+  check(state.x, state.z);
+  return best;
+}
+const AI_DECEL = 7;
+function updateAI(dt) {
+  for (const a of aiCars) {
+    const fx = a.d.dx, fz = a.d.dz;
+    const along = a.d.axis === 'z' ? a.z : a.x;
+    const dirSign = a.d.axis === 'z' ? a.d.dz : a.d.dx;
+    const limit = streetLimit(a.line) / 3.6 * 0.9;
+    let allowed = limit;
+    // Valot: pysähdy pysäytysviivalle punaisella, keltaisella jos ehtii
+    if (a.plan && a.plan.k != null) {
+      const it = a.d.axis === 'z' ? interAt(a.line, a.plan.k) : interAt(a.plan.k, a.line);
+      const stopAt = roadLine(a.plan.k) - dirSign * (ROAD / 2 + 2.6);
+      const dist = (stopAt - along) * dirSign;
+      const st = lightState(it, a.d.axis, simTime);
+      if (dist > -0.5 && (st === 'red' || (st === 'yellow' && dist > 8))) allowed = Math.min(allowed, Math.sqrt(2 * AI_DECEL * Math.max(0, dist)));
+      if (a.plan.turn) allowed = Math.min(allowed, Math.max(6, Math.sqrt(2 * AI_DECEL * Math.max(0, (a.plan.turnAt - along) * dirSign)) + 6));
+    }
+    const obs = aiObstacle(a, fx, fz);
+    if (obs < Infinity) allowed = Math.min(allowed, Math.sqrt(2 * AI_DECEL * Math.max(0, obs - 7)));
+    if (a.bump > 0) { a.bump -= dt; allowed = 0; }
+    a.speed += Math.max(-AI_DECEL * 1.5 * dt, Math.min(4 * dt, allowed - a.speed));
+    a.speed = Math.max(0, a.speed);
+    let nAlong = along + dirSign * a.speed * dt;
+
+    // Kääntyminen
+    if (a.plan && a.plan.turn && (nAlong - a.plan.turnAt) * dirSign >= 0) {
+      const lc = laneCoord(a.line, a.d);
+      const nd = a.plan.nd;
+      a.line = a.plan.newLine; a.d = nd;
+      // Uudella kaistalla: kulkuakselin sijainti on vanhan kaistan kohta
+      if (nd.axis === 'z') { a.x = laneCoord(a.line, nd); a.z = lc; }
+      else { a.z = laneCoord(a.line, nd); a.x = lc; }
+      planTurn(a);
+    } else {
+      if (a.d.axis === 'z') a.z = nAlong; else a.x = nAlong;
+      if (a.plan && a.plan.k != null && (nAlong - roadLine(a.plan.k)) * dirSign > ROAD / 2) planTurn(a);
+    }
+    if (Math.abs(a.x) > HALF + ROAD || Math.abs(a.z) > HALF + ROAD || (a.plan && a.plan.k == null && Math.abs(along) > HALF - 2)) spawnAI(a);
+
+    // Pehmeä kääntyminen näkymässä
+    a.yaw += angleDiff(a.d.h * 180 / Math.PI, a.yaw * 180 / Math.PI) * Math.PI / 180 * Math.min(1, dt * 7);
+    a.mesh.position.set(a.x, 0, a.z);
+    a.mesh.rotation.y = a.yaw;
+    for (const w of a.mesh.userData.wheels) w.wheel.rotation.x += a.speed * dt / 0.4;
+  }
+}
+for (let i = 0; i < AI_COUNT; i++) {
+  const a = { mesh: makeCar(AI_COLORS[i % AI_COLORS.length], false) };
+  scene.add(a.mesh);
+  aiCars.push(a);
+  spawnAI(a);
+}
+// Törmäys pelaajan ja muiden autojen välillä
+function collideAI() {
+  for (const a of aiCars) {
+    const dx = state.x - a.x, dz = state.z - a.z, d = Math.hypot(dx, dz);
+    if (d < 3.4 && d > 0.001) {
+      state.x = a.x + dx / d * 3.4; state.z = a.z + dz / d * 3.4;
+      if (Math.abs(state.speed) > 1) a.bump = 1.5;
+      state.speed *= -0.3;
+    }
+  }
+}
+
 // ---------- Kamera ----------
 const camPos = new THREE.Vector3();
 let camInit = false;
@@ -427,8 +735,13 @@ const speedEl = document.getElementById('speed');
 let last = performance.now();
 function loop(now) {
   const dt = Math.min(0.05, (now - last) / 1000); last = now;
+  simTime += dt;
   updateWheel(dt);
   update(dt);
+  updateAI(dt);
+  collideAI();
+  updateLights();
+  updateRules(dt);
   updateCamera(dt);
   speedEl.innerHTML = Math.round(Math.abs(state.speed) * 3.6) + ' <small>km/h</small>';
   renderer.render(scene, camera);
@@ -441,7 +754,11 @@ addEventListener('resize', () => {
   renderer.setSize(innerWidth, innerHeight);
 });
 // Testejä varten
-window.__game = { state, keys, buildings, get wheel() { return wheelInput; } };
+// PWA: välimuisti offline-käyttöä varten (vain omalla https-sivulla)
+if ('serviceWorker' in navigator && (location.protocol === 'https:' || location.hostname === 'localhost') && window.top === window.self) {
+  addEventListener('load', () => navigator.serviceWorker.register('sw.js').catch(() => {}));
+}
+window.__game = { state, keys, buildings, aiCars, fines, intersections, lightState, get simTime() { return simTime; }, get limit() { return currentLimit; }, get wheel() { return wheelInput; } };
 </script>
 </body>
 </html>
