@@ -1,0 +1,443 @@
+<!DOCTYPE html>
+<html lang="fi">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<title>UltraAutopeli</title>
+<style>
+  html, body { margin: 0; height: 100%; overflow: hidden; background: #8fc7ff; font-family: system-ui, sans-serif; touch-action: none; user-select: none; -webkit-user-select: none; }
+  canvas { display: block; }
+  #hud { position: fixed; top: 12px; left: 12px; color: #fff; text-shadow: 0 1px 3px rgba(0,0,0,.6); pointer-events: none; }
+  #speed { font-size: 40px; font-weight: 800; line-height: 1; }
+  #speed small { font-size: 16px; font-weight: 600; }
+  #help { margin-top: 6px; font-size: 13px; opacity: .9; }
+  .pad { position: fixed; bottom: 16px; right: 16px; display: flex; gap: 14px; align-items: flex-end; }
+  .btn { width: 84px; height: 110px; border-radius: 16px; background: rgba(0,0,0,.4); color: #fff; font-size: 17px; font-weight: 700; display: flex; align-items: center; justify-content: center; border: 2px solid rgba(255,255,255,.5); }
+  .btn.gas { height: 150px; background: rgba(30,120,40,.55); }
+  .btn.brake { background: rgba(160,30,30,.55); }
+  .btn.on { background: rgba(255,255,255,.5); color: #111; }
+  #topbar { position: fixed; top: 12px; right: 12px; display: flex; gap: 8px; }
+  #topbar button { font: 600 14px system-ui, sans-serif; color: #fff; background: rgba(0,0,0,.45); border: 1px solid rgba(255,255,255,.5); border-radius: 10px; padding: 8px 12px; }
+  #tiltState { margin-top: 4px; font-size: 13px; }
+  #start { position: fixed; inset: 0; background: rgba(10,20,40,.72); color: #fff; display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center; padding: 24px; gap: 14px; z-index: 10; }
+  #start h1 { margin: 0; font-size: 34px; }
+  #start p { margin: 0; max-width: 460px; line-height: 1.4; opacity: .92; }
+  #start button { font: 800 22px system-ui, sans-serif; padding: 14px 40px; border-radius: 14px; border: 0; background: #e63946; color: #fff; }
+  @media (hover: hover) and (pointer: fine) { .pad { display: none; } }
+  #wheel { position: fixed; left: 20px; bottom: 20px; width: 170px; height: 170px; touch-action: none; cursor: grab; filter: drop-shadow(0 3px 6px rgba(0,0,0,.45)); }
+  #wheel.drag { cursor: grabbing; }
+  @media (pointer: coarse) { #help { display: none; } }
+</style>
+</head>
+<body>
+<div id="hud">
+  <div id="speed">0 <small>km/h</small></div>
+  <div id="help">Välilyönti: kaasu · Shift: jarru (pysähtyneenä peruutus) · ← → tai A D: käännä · R: alkuun</div>
+  <div id="tiltState"></div>
+</div>
+<div id="topbar">
+  <button id="calib" hidden>Kalibroi</button>
+  <button id="resetBtn">Alkuun</button>
+</div>
+<div id="start">
+  <h1>UltraAutopeli</h1>
+  <p>Puhelimella: käännä puhelin vaakaan ja pidä sitä kuin rattia. Peli asettaa aloitushetken asennon suoraksi. Kaasu ja jarru ovat oikeassa reunassa.</p>
+  <p>Tietokoneella: välilyönti on kaasu, Shift jarru ja nuolet kääntävät. Rattia voi myös vetää hiirellä.</p>
+  <button id="startBtn">Aja!</button>
+</div>
+<svg id="wheel" viewBox="-100 -100 200 200" aria-label="Ratti">
+  <g id="wheelRot">
+    <circle r="88" fill="none" stroke="#1d1f24" stroke-width="22"/>
+    <circle r="88" fill="none" stroke="#3a3e46" stroke-width="10"/>
+    <path d="M-84,-8 L-26,-14 L26,-14 L84,-8 L84,8 L26,14 L14,40 L10,80 L-10,80 L-14,40 L-26,14 L-84,8 Z" fill="#2a2d33"/>
+    <circle r="26" fill="#1d1f24" stroke="#555a63" stroke-width="3"/>
+    <rect x="-5" y="-99" width="10" height="22" rx="3" fill="#e63946"/>
+  </g>
+</svg>
+<div class="pad">
+  <div class="btn brake" data-k="down">JARRU</div>
+  <div class="btn gas" data-k="up">KAASU</div>
+</div>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script>
+// ---------- Asetukset ----------
+const BLOCK = 60;          // korttelin koko (m)
+const ROAD = 14;           // kadun leveys (m)
+const CELL = BLOCK + ROAD; // korttelin ja kadun jakso
+const GRID = 8;            // kortteleita per sivu
+const CITY = GRID * CELL;  // kaupungin koko
+const HALF = CITY / 2;
+
+// Toistettava satunnaisluku, jotta kaupunki on joka kerta sama
+let seed = 12345;
+function rnd() { seed = (seed * 16807) % 2147483647; return (seed - 1) / 2147483646; }
+
+// ---------- Näkymä ----------
+const renderer = new THREE.WebGLRenderer({ antialias: true });
+renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+renderer.setSize(innerWidth, innerHeight);
+renderer.shadowMap.enabled = true;
+document.body.appendChild(renderer.domElement);
+
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x8fc7ff);
+scene.fog = new THREE.Fog(0x8fc7ff, 120, 420);
+
+const camera = new THREE.PerspectiveCamera(65, innerWidth / innerHeight, 0.5, 1000);
+
+scene.add(new THREE.HemisphereLight(0xffffff, 0x556655, 0.75));
+const sun = new THREE.DirectionalLight(0xffffff, 0.8);
+sun.position.set(60, 120, 40);
+sun.castShadow = true;
+sun.shadow.mapSize.set(2048, 2048);
+Object.assign(sun.shadow.camera, { left: -80, right: 80, top: 80, bottom: -80, near: 1, far: 300 });
+scene.add(sun, sun.target);
+
+// ---------- Maa ja kadut ----------
+const asphalt = new THREE.Mesh(new THREE.PlaneGeometry(CITY + 200, CITY + 200), new THREE.MeshLambertMaterial({ color: 0x3b3f45 }));
+asphalt.rotation.x = -Math.PI / 2;
+asphalt.receiveShadow = true;
+scene.add(asphalt);
+
+// Korttelin keskipiste: kadut kulkevat korttelien välissä, kaupungin keskellä on risteys
+function blockCenter(i) { return -HALF + ROAD / 2 + BLOCK / 2 + i * CELL; }
+
+const lineMat = new THREE.MeshBasicMaterial({ color: 0xf2e9c9 });
+const walkMat = new THREE.MeshLambertMaterial({ color: 0xa7a9a3 });
+const grassMat = new THREE.MeshLambertMaterial({ color: 0x6faa55 });
+const buildingColors = [0xe8d5b5, 0xc9d6df, 0xd98e73, 0xf0f0e8, 0x9fb7c8, 0xe6c46a, 0xb5a7d6, 0x8fbf9f];
+
+const buildings = []; // törmäyslaatikot {minX,maxX,minZ,maxZ}
+const intersections = []; // tulevia liikennevaloja varten
+
+for (let i = 0; i < GRID; i++) {
+  for (let j = 0; j < GRID; j++) {
+    const cx = blockCenter(i), cz = blockCenter(j);
+    // Jalkakäytävä
+    const walk = new THREE.Mesh(new THREE.BoxGeometry(BLOCK, 0.25, BLOCK), walkMat);
+    walk.position.set(cx, 0.125, cz);
+    walk.receiveShadow = true;
+    scene.add(walk);
+
+    if (rnd() < 0.12) {
+      // Puisto
+      const park = new THREE.Mesh(new THREE.BoxGeometry(BLOCK - 6, 0.3, BLOCK - 6), grassMat);
+      park.position.set(cx, 0.15, cz);
+      park.receiveShadow = true;
+      scene.add(park);
+      for (let t = 0; t < 6; t++) addTree(cx + (rnd() - .5) * (BLOCK - 14), cz + (rnd() - .5) * (BLOCK - 14));
+      continue;
+    }
+    // Talot: kortteli jaetaan 2x2 tonttiin
+    const lot = (BLOCK - 6) / 2;
+    for (let a = 0; a < 2; a++) for (let b = 0; b < 2; b++) {
+      const w = lot - 2 - rnd() * 6, d = lot - 2 - rnd() * 6;
+      const distFromCenter = Math.hypot(cx, cz) / HALF;
+      const h = 8 + rnd() * 30 * (1.4 - distFromCenter) + (rnd() < 0.08 ? 40 : 0);
+      const x = cx - lot / 2 + a * lot, z = cz - lot / 2 + b * lot;
+      const mat = new THREE.MeshLambertMaterial({ color: buildingColors[Math.floor(rnd() * buildingColors.length)] });
+      const m = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), mat);
+      m.position.set(x, h / 2 + 0.25, z);
+      m.castShadow = true; m.receiveShadow = true;
+      scene.add(m);
+      addWindows(m, w, h, d);
+      buildings.push({ minX: x - w / 2, maxX: x + w / 2, minZ: z - d / 2, maxZ: z + d / 2 });
+    }
+  }
+}
+
+// Kaistaviivat ja risteykset
+for (let k = 0; k <= GRID; k++) {
+  const roadPos = -HALF + k * CELL; // kadun keskilinja
+  for (let s = 0; s < GRID; s++) {
+    const segStart = blockCenter(s) - BLOCK / 2 + 3;
+    for (let p = segStart; p < blockCenter(s) + BLOCK / 2 - 3; p += 6) {
+      const dashX = new THREE.Mesh(new THREE.PlaneGeometry(3, 0.25), lineMat);
+      dashX.rotation.x = -Math.PI / 2; dashX.position.set(p + 1.5, 0.02, roadPos); scene.add(dashX);
+      const dashZ = new THREE.Mesh(new THREE.PlaneGeometry(0.25, 3), lineMat);
+      dashZ.rotation.x = -Math.PI / 2; dashZ.position.set(roadPos, 0.02, p + 1.5); scene.add(dashZ);
+    }
+  }
+  for (let l = 0; l <= GRID; l++) intersections.push({ x: roadPos, z: -HALF + l * CELL });
+}
+
+// Kaupungin reunamuuri, ettei aja maailman laidalta ulos
+const wallLimit = HALF + ROAD / 2;
+
+function addTree(x, z) {
+  const trunk = new THREE.Mesh(new THREE.CylinderGeometry(0.3, 0.4, 2.5), new THREE.MeshLambertMaterial({ color: 0x7a5530 }));
+  trunk.position.set(x, 1.5, z);
+  const crown = new THREE.Mesh(new THREE.SphereGeometry(2.2, 8, 6), new THREE.MeshLambertMaterial({ color: 0x3f8f3a }));
+  crown.position.set(x, 4.2, z);
+  crown.castShadow = true;
+  scene.add(trunk, crown);
+  buildings.push({ minX: x - 0.5, maxX: x + 0.5, minZ: z - 0.5, maxZ: z + 0.5 });
+}
+
+// Ikkunarivit yhtenä tekstuurina kustakin talosta
+var _windowTex = null;
+function getWindowTex() {
+  if (_windowTex) return _windowTex;
+  _windowTex = (() => {
+  const c = document.createElement('canvas'); c.width = 64; c.height = 64;
+  const g = c.getContext('2d');
+  g.fillStyle = '#ffffff'; g.fillRect(0, 0, 64, 64);
+  g.fillStyle = '#5a6f85';
+  for (let y = 8; y < 64; y += 16) for (let x = 6; x < 64; x += 16) g.fillRect(x, y, 8, 8);
+  const t = new THREE.CanvasTexture(c); t.wrapS = t.wrapT = THREE.RepeatWrapping; return t;
+  })();
+  return _windowTex;
+}
+function addWindows(mesh, w, h, d) {
+  const mats = [];
+  for (let f = 0; f < 6; f++) {
+    if (f === 2 || f === 3) { mats.push(mesh.material); continue; } // katto ja pohja
+    const tex = getWindowTex().clone(); tex.needsUpdate = true;
+    tex.repeat.set((f < 2 ? d : w) / 4, h / 4);
+    mats.push(new THREE.MeshLambertMaterial({ color: mesh.material.color, map: tex }));
+  }
+  mesh.material = mats;
+}
+
+// ---------- Auto ----------
+const car = new THREE.Group();
+(function buildCar() {
+  const body = new THREE.Mesh(new THREE.BoxGeometry(2, 0.8, 4.2), new THREE.MeshLambertMaterial({ color: 0xd62828 }));
+  body.position.y = 0.75; body.castShadow = true;
+  const cabin = new THREE.Mesh(new THREE.BoxGeometry(1.7, 0.7, 2.1), new THREE.MeshLambertMaterial({ color: 0x22313f }));
+  cabin.position.set(0, 1.5, -0.2); cabin.castShadow = true;
+  car.add(body, cabin);
+  const lightMat = new THREE.MeshBasicMaterial({ color: 0xfff6c0 });
+  const tailMat = new THREE.MeshBasicMaterial({ color: 0xff3030 });
+  for (const sx of [-0.65, 0.65]) {
+    const hl = new THREE.Mesh(new THREE.BoxGeometry(0.4, 0.2, 0.05), lightMat); hl.position.set(sx, 0.85, 2.11); car.add(hl);
+    const tl = new THREE.Mesh(new THREE.BoxGeometry(0.4, 0.2, 0.05), tailMat); tl.position.set(sx, 0.85, -2.11); car.add(tl);
+  }
+  const wheelGeo = new THREE.CylinderGeometry(0.4, 0.4, 0.3, 14); wheelGeo.rotateZ(Math.PI / 2);
+  const wheelMat = new THREE.MeshLambertMaterial({ color: 0x111111 });
+  car.userData.wheels = [];
+  for (const [x, z] of [[-1, 1.3], [1, 1.3], [-1, -1.3], [1, -1.3]]) {
+    const pivot = new THREE.Group(); pivot.position.set(x, 0.4, z);
+    const wheel = new THREE.Mesh(wheelGeo, wheelMat); pivot.add(wheel);
+    car.add(pivot); car.userData.wheels.push({ pivot, wheel, front: z > 0 });
+  }
+})();
+scene.add(car);
+
+// Auton tila
+const state = { x: 0, z: 0, heading: 0, speed: 0, steer: 0 };
+function resetCar() {
+  // Aloitus kadulla korttelin vierestä, keula +z-suuntaan, oikealla kaistalla
+  Object.assign(state, { x: -ROAD / 4, z: blockCenter(GRID / 2), heading: 0, speed: 0, steer: 0 });
+}
+resetCar();
+
+// ---------- Ohjaus ----------
+const keys = { up: false, down: false, left: false, right: false, brake: false };
+const keyMap = { ArrowUp: 'up', KeyW: 'up', ArrowDown: 'down', KeyS: 'down', ArrowLeft: 'left', KeyA: 'left', ArrowRight: 'right', KeyD: 'right', Space: 'up', ShiftLeft: 'down', ShiftRight: 'down' };
+addEventListener('keydown', e => { if (keyMap[e.code]) { keys[keyMap[e.code]] = true; e.preventDefault(); } if (e.code === 'KeyR') resetCar(); });
+addEventListener('keyup', e => { if (keyMap[e.code]) keys[keyMap[e.code]] = false; });
+document.querySelectorAll('.btn').forEach(b => {
+  const k = b.dataset.k;
+  const on = e => { e.preventDefault(); keys[k] = true; b.classList.add('on'); };
+  const off = e => { e.preventDefault(); keys[k] = false; b.classList.remove('on'); };
+  b.addEventListener('pointerdown', on); b.addEventListener('pointerup', off);
+  b.addEventListener('pointercancel', off); b.addEventListener('pointerleave', off);
+});
+
+// ---------- Ratti ----------
+// wheelInput -1..1 (positiivinen = vasemmalle). Ratin täysi kääntö on 135 astetta.
+const WHEEL_MAX_DEG = 135;
+const wheelEl = document.getElementById('wheel');
+const wheelRot = document.getElementById('wheelRot');
+let wheelInput = 0, wheelDrag = null;
+function pointerAngle(e) {
+  const r = wheelEl.getBoundingClientRect();
+  return Math.atan2(e.clientY - (r.top + r.height / 2), e.clientX - (r.left + r.width / 2)) * 180 / Math.PI;
+}
+wheelEl.addEventListener('pointerdown', e => {
+  e.preventDefault(); wheelEl.setPointerCapture(e.pointerId); wheelEl.classList.add('drag');
+  wheelDrag = { id: e.pointerId, last: pointerAngle(e), deg: -wheelInput * WHEEL_MAX_DEG };
+});
+wheelEl.addEventListener('pointermove', e => {
+  if (!wheelDrag || e.pointerId !== wheelDrag.id) return;
+  const a = pointerAngle(e);
+  let d = a - wheelDrag.last; if (d > 180) d -= 360; if (d < -180) d += 360;
+  wheelDrag.last = a;
+  wheelDrag.deg = Math.max(-WHEEL_MAX_DEG, Math.min(WHEEL_MAX_DEG, wheelDrag.deg + d));
+  wheelInput = -wheelDrag.deg / WHEEL_MAX_DEG;
+});
+const wheelRelease = e => { if (wheelDrag && e.pointerId === wheelDrag.id) { wheelDrag = null; wheelEl.classList.remove('drag'); } };
+wheelEl.addEventListener('pointerup', wheelRelease);
+wheelEl.addEventListener('pointercancel', wheelRelease);
+
+// ---------- Kallistusohjaus ----------
+// Painovoiman suunta näytön tasossa kertoo, kuinka paljon puhelinta on käännetty kuin rattia.
+// Kalibrointi tallentaa suoran asennon; ero siihen on ohjauskulma.
+const TILT_FULL_DEG = 40;  // näin monen asteen kallistus = täysi ohjaus
+const TILT_DEADZONE = 2;   // pieni tärinä ei ohjaa
+const tilt = { enabled: false, raw: null, smooth: null, zero: null, input: 0, lastEvent: 0 };
+const tiltStateEl = document.getElementById('tiltState');
+const calibBtn = document.getElementById('calib');
+
+function screenAngle() {
+  if (screen.orientation && typeof screen.orientation.angle === 'number') return screen.orientation.angle;
+  return typeof window.orientation === 'number' ? window.orientation : 0;
+}
+function angleDiff(a, b) { let d = a - b; while (d > 180) d -= 360; while (d < -180) d += 360; return d; }
+
+function onMotion(e) {
+  const g = e.accelerationIncludingGravity;
+  if (!g || g.x == null || g.y == null) return;
+  const a = screenAngle() * Math.PI / 180;
+  // Laitteen akselit näytön akseleiksi (x oikealle, y ylös)
+  const sx = g.x * Math.cos(a) - g.y * Math.sin(a);
+  const sy = g.x * Math.sin(a) + g.y * Math.cos(a);
+  if (Math.hypot(sx, sy) < 2) return; // puhelin lähes vaakatasossa: kulma epävarma
+  const deg = Math.atan2(sx, sy) * 180 / Math.PI;
+  tilt.raw = deg;
+  tilt.smooth = tilt.smooth == null ? deg : tilt.smooth + angleDiff(deg, tilt.smooth) * 0.35;
+  if (tilt.zero == null) tilt.zero = tilt.smooth;
+  tilt.lastEvent = performance.now();
+  if (!tilt.enabled) { tilt.enabled = true; calibBtn.hidden = false; tiltStateEl.textContent = 'Kallistusohjaus päällä'; }
+}
+function calibrate() { if (tilt.smooth != null) tilt.zero = tilt.smooth; }
+calibBtn.addEventListener('click', calibrate);
+addEventListener('orientationchange', () => { tilt.zero = null; tilt.smooth = null; });
+if (screen.orientation) screen.orientation.addEventListener('change', () => { tilt.zero = null; tilt.smooth = null; });
+
+async function startTilt() {
+  try {
+    if (typeof DeviceMotionEvent !== 'undefined' && typeof DeviceMotionEvent.requestPermission === 'function') {
+      const res = await DeviceMotionEvent.requestPermission(); // iPhone vaatii luvan
+      if (res !== 'granted') { tiltStateEl.textContent = 'Liikeanturin lupa evättiin: käytä rattia'; return; }
+    }
+    if (typeof DeviceMotionEvent === 'undefined') return;
+    addEventListener('devicemotion', onMotion);
+  } catch (err) {
+    tiltStateEl.textContent = 'Liikeanturi ei käytettävissä: käytä rattia';
+  }
+}
+function tiltInput() {
+  if (!tilt.enabled || tilt.zero == null || performance.now() - tilt.lastEvent > 1000) return null;
+  let d = angleDiff(tilt.smooth, tilt.zero);
+  // Myötäpäivään käännetty puhelin (oikealle) antaa negatiivisen kulman = oikealle
+  if (Math.abs(d) < TILT_DEADZONE) d = 0; else d -= Math.sign(d) * TILT_DEADZONE;
+  return Math.max(-1, Math.min(1, d / (TILT_FULL_DEG - TILT_DEADZONE)));
+}
+
+// Aloitusnappi: lupa, koko näyttö ja vaakasuunta (jos selain sallii)
+document.getElementById('startBtn').addEventListener('click', async () => {
+  document.getElementById('start').style.display = 'none';
+  startTilt(); // ensin, koska luvan pyyntö vaatii tuoreen napautuksen
+  const coarse = matchMedia('(pointer: coarse)').matches;
+  if (coarse) {
+    try { await document.documentElement.requestFullscreen(); } catch (e) {}
+    try { await screen.orientation.lock('landscape'); } catch (e) {}
+  }
+});
+document.getElementById('resetBtn').addEventListener('click', () => { resetCar(); calibrate(); });
+
+function updateWheel(dt) {
+  const t = wheelDrag ? null : tiltInput();
+  if (t != null) {
+    wheelInput = t;
+  } else if (!wheelDrag) {
+    // Näppäimillä ratti kääntyy pehmeästi, irti päästäessä se palautuu keskelle
+    const target = (keys.left ? 1 : 0) - (keys.right ? 1 : 0);
+    const rate = target === 0 ? 4 : 2.5;
+    const diff = target - wheelInput;
+    wheelInput += Math.sign(diff) * Math.min(Math.abs(diff), rate * dt);
+  }
+  wheelRot.setAttribute('transform', 'rotate(' + (-wheelInput * WHEEL_MAX_DEG).toFixed(1) + ')');
+}
+function steerInput() { return wheelInput; }
+
+// ---------- Fysiikka ----------
+const MAX_SPEED = 30;      // m/s, noin 108 km/h
+const MAX_REVERSE = 8;
+const ACCEL = 9, BRAKE = 22, DRAG = 0.6, ROLL = 2.5;
+const WHEELBASE = 2.6, MAX_STEER = 0.6;
+const CAR_RADIUS = 1.6;
+
+function update(dt) {
+  // Kaasu, jarru ja peruutus
+  if (keys.brake) state.speed -= Math.sign(state.speed) * Math.min(Math.abs(state.speed), BRAKE * dt);
+  else if (keys.up) state.speed += (state.speed < 0 ? BRAKE : ACCEL) * dt;
+  else if (keys.down) state.speed -= (state.speed > 0 ? BRAKE : ACCEL * 0.6) * dt;
+  else state.speed -= Math.sign(state.speed) * Math.min(Math.abs(state.speed), ROLL * dt);
+  state.speed -= state.speed * DRAG * 0.02 * dt * Math.abs(state.speed) / 10;
+  state.speed = Math.max(-MAX_REVERSE, Math.min(MAX_SPEED, state.speed));
+
+  // Ohjaus pehmeästi, kovassa vauhdissa vähemmän kääntökulmaa
+  const target = steerInput() * MAX_STEER * (1 - Math.min(Math.abs(state.speed) / MAX_SPEED, 1) * 0.55);
+  state.steer += (target - state.steer) * Math.min(1, dt * 8);
+
+  // Polkupyörämalli
+  state.heading += state.speed / WHEELBASE * Math.tan(state.steer) * dt;
+  let nx = state.x + Math.sin(state.heading) * state.speed * dt;
+  let nz = state.z + Math.cos(state.heading) * state.speed * dt;
+
+  // Törmäykset taloihin: ympyrä vs. laatikko
+  let hit = false;
+  for (const b of buildings) {
+    if (nx < b.minX - CAR_RADIUS - 2 || nx > b.maxX + CAR_RADIUS + 2 || nz < b.minZ - CAR_RADIUS - 2 || nz > b.maxZ + CAR_RADIUS + 2) continue;
+    const px = Math.max(b.minX, Math.min(nx, b.maxX)), pz = Math.max(b.minZ, Math.min(nz, b.maxZ));
+    const dx = nx - px, dz = nz - pz, d = Math.hypot(dx, dz);
+    if (d < CAR_RADIUS) {
+      hit = true;
+      if (d > 0.0001) { nx = px + dx / d * CAR_RADIUS; nz = pz + dz / d * CAR_RADIUS; }
+      else { nx = state.x; nz = state.z; }
+    }
+  }
+  if (Math.abs(nx) > wallLimit) { nx = Math.sign(nx) * wallLimit; hit = true; }
+  if (Math.abs(nz) > wallLimit) { nz = Math.sign(nz) * wallLimit; hit = true; }
+  if (hit) state.speed *= -0.25;
+  state.x = nx; state.z = nz;
+
+  // Malli ja pyörät
+  car.position.set(state.x, 0, state.z);
+  car.rotation.y = state.heading;
+  for (const w of car.userData.wheels) {
+    if (w.front) w.pivot.rotation.y = state.steer;
+    w.wheel.rotation.x += state.speed * dt / 0.4;
+  }
+}
+
+// ---------- Kamera ----------
+const camPos = new THREE.Vector3();
+let camInit = false;
+function updateCamera(dt) {
+  const back = 9 + Math.abs(state.speed) * 0.12;
+  const desired = new THREE.Vector3(state.x - Math.sin(state.heading) * back, 4 + Math.abs(state.speed) * 0.04, state.z - Math.cos(state.heading) * back);
+  if (!camInit) { camPos.copy(desired); camInit = true; }
+  camPos.lerp(desired, Math.min(1, dt * 4));
+  camera.position.copy(camPos);
+  camera.lookAt(state.x + Math.sin(state.heading) * 4, 1.5, state.z + Math.cos(state.heading) * 4);
+  sun.position.set(state.x + 60, 120, state.z + 40);
+  sun.target.position.set(state.x, 0, state.z);
+}
+
+// ---------- Silmukka ----------
+const speedEl = document.getElementById('speed');
+let last = performance.now();
+function loop(now) {
+  const dt = Math.min(0.05, (now - last) / 1000); last = now;
+  updateWheel(dt);
+  update(dt);
+  updateCamera(dt);
+  speedEl.innerHTML = Math.round(Math.abs(state.speed) * 3.6) + ' <small>km/h</small>';
+  renderer.render(scene, camera);
+  requestAnimationFrame(loop);
+}
+requestAnimationFrame(loop);
+
+addEventListener('resize', () => {
+  camera.aspect = innerWidth / innerHeight; camera.updateProjectionMatrix();
+  renderer.setSize(innerWidth, innerHeight);
+});
+// Testejä varten
+window.__game = { state, keys, buildings, get wheel() { return wheelInput; } };
+</script>
+</body>
+</html>
