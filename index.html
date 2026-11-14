@@ -610,7 +610,6 @@ for (const it of intersections) {
       });
       scene.add(head);
       it.heads[d.axis].push(lamps);
-      buildings.push({ minX: px - 0.2, maxX: px + 0.2, minZ: pz - 0.2, maxZ: pz + 0.2 });
       // Pysäytysviiva ennen risteystä omalla kaistalla
       const sl = new THREE.Mesh(stopGeo, lineMat);
       sl.rotation.x = -Math.PI / 2; sl.rotation.z = -d.h;
