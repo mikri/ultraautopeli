@@ -41,7 +41,7 @@
 </div>
 <div id="start">
   <h1>UltraAutopeli</h1>
-  <p>Puhelimella: käännä puhelin vaakaan ja pidä sitä kuin rattia. Peli asettaa aloitushetken asennon suoraksi. Kaasu ja jarru ovat oikeassa reunassa.</p>
+  <p>Puhelimella: käännä puhelin vaakasuuntaan ja pidä sitä vaakatasossa näyttö ylöspäin. Kallista vasemmalle tai oikealle kääntääksesi. Aloitushetken asento on suora. Kaasu ja jarru ovat oikeassa reunassa.</p>
   <p>Tietokoneella: välilyönti on kaasu, Shift jarru ja nuolet kääntävät. Rattia voi myös vetää hiirellä.</p>
   <button id="startBtn">Aja!</button>
 </div>
@@ -272,9 +272,10 @@ wheelEl.addEventListener('pointerup', wheelRelease);
 wheelEl.addEventListener('pointercancel', wheelRelease);
 
 // ---------- Kallistusohjaus ----------
-// Painovoiman suunta näytön tasossa kertoo, kuinka paljon puhelinta on käännetty kuin rattia.
+// Puhelinta pidetään vaakatasossa (näyttö ylöspäin) ja kallistetaan vasemmalle tai oikealle.
+// Kallistuskulma luetaan deviceorientation-tapahtumasta (beta/gamma), joka toimii samoin iPhonessa ja Androidissa.
 // Kalibrointi tallentaa suoran asennon; ero siihen on ohjauskulma.
-const TILT_FULL_DEG = 40;  // näin monen asteen kallistus = täysi ohjaus
+const TILT_FULL_DEG = 30;  // näin monen asteen kallistus = täysi ohjaus
 const TILT_DEADZONE = 2;   // pieni tärinä ei ohjaa
 const tilt = { enabled: false, raw: null, smooth: null, zero: null, input: 0, lastEvent: 0 };
 const tiltStateEl = document.getElementById('tiltState');
@@ -286,15 +287,18 @@ function screenAngle() {
 }
 function angleDiff(a, b) { let d = a - b; while (d > 180) d -= 360; while (d < -180) d += 360; return d; }
 
-function onMotion(e) {
-  const g = e.accelerationIncludingGravity;
-  if (!g || g.x == null || g.y == null) return;
-  const a = screenAngle() * Math.PI / 180;
-  // Laitteen akselit näytön akseleiksi (x oikealle, y ylös)
-  const sx = g.x * Math.cos(a) - g.y * Math.sin(a);
-  const sy = g.x * Math.sin(a) + g.y * Math.cos(a);
-  if (Math.hypot(sx, sy) < 2) return; // puhelin lähes vaakatasossa: kulma epävarma
-  const deg = Math.atan2(sx, sy) * 180 / Math.PI;
+// Palauttaa kallistuksen asteina näytön suhteen: positiivinen = vasen reuna alempana (= vasemmalle)
+function sideTilt(beta, gamma) {
+  const a = ((screenAngle() % 360) + 360) % 360;
+  if (a === 90) return -beta;    // vaakasuunta, laitteen yläreuna vasemmalla
+  if (a === 270) return beta;    // vaakasuunta toisin päin
+  if (a === 180) return gamma;   // pysty, ylösalaisin
+  return -gamma;                 // pysty
+}
+
+function onOrientation(e) {
+  if (e.beta == null || e.gamma == null) return;
+  const deg = sideTilt(e.beta, e.gamma);
   tilt.raw = deg;
   tilt.smooth = tilt.smooth == null ? deg : tilt.smooth + angleDiff(deg, tilt.smooth) * 0.35;
   if (tilt.zero == null) tilt.zero = tilt.smooth;
@@ -308,12 +312,12 @@ if (screen.orientation) screen.orientation.addEventListener('change', () => { ti
 
 async function startTilt() {
   try {
-    if (typeof DeviceMotionEvent !== 'undefined' && typeof DeviceMotionEvent.requestPermission === 'function') {
-      const res = await DeviceMotionEvent.requestPermission(); // iPhone vaatii luvan
+    if (typeof DeviceOrientationEvent === 'undefined') return;
+    if (typeof DeviceOrientationEvent.requestPermission === 'function') {
+      const res = await DeviceOrientationEvent.requestPermission(); // iPhone vaatii luvan
       if (res !== 'granted') { tiltStateEl.textContent = 'Liikeanturin lupa evättiin: käytä rattia'; return; }
     }
-    if (typeof DeviceMotionEvent === 'undefined') return;
-    addEventListener('devicemotion', onMotion);
+    addEventListener('deviceorientation', onOrientation);
   } catch (err) {
     tiltStateEl.textContent = 'Liikeanturi ei käytettävissä: käytä rattia';
   }
@@ -321,7 +325,7 @@ async function startTilt() {
 function tiltInput() {
   if (!tilt.enabled || tilt.zero == null || performance.now() - tilt.lastEvent > 1000) return null;
   let d = angleDiff(tilt.smooth, tilt.zero);
-  // Myötäpäivään käännetty puhelin (oikealle) antaa negatiivisen kulman = oikealle
+  // Oikea reuna alempana antaa negatiivisen kulman = oikealle
   if (Math.abs(d) < TILT_DEADZONE) d = 0; else d -= Math.sign(d) * TILT_DEADZONE;
   return Math.max(-1, Math.min(1, d / (TILT_FULL_DEG - TILT_DEADZONE)));
 }
