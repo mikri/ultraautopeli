@@ -1,6 +1,6 @@
 // UltraAutopeli: välimuisti, jotta peli käynnistyy nopeasti ja toimii myös ilman verkkoa.
 // Haetaan aina ensin verkosta (uusin versio), ja välimuistista vain jos verkko ei vastaa.
-const CACHE = 'ultraautopeli-v1';
+const CACHE = 'ultraautopeli-v2';
 const CORE = ['./', './index.html', './manifest.webmanifest', './icons/icon-192.png', './icons/icon-512.png'];
 const LIBS = ['https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js'];
 

@@ -89,6 +89,7 @@
   <div class="modes">
     <button data-mode="free" class="alt">Vapaa ajo</button>
     <button data-mode="race">Kisa 🏁</button>
+    <button data-mode="motorway" class="alt">Moottoritie 🛣️</button>
   </div>
   <div class="hint">Puhelin: pidä vaakatasossa ja kallista. Jarru vasemmalla, kaasu oikealla. · Tietokone: välilyönti kaasu, Shift jarru, nuolet kääntävät.</div>
 </div>
@@ -327,7 +328,7 @@ resetCar();
 // ---------- Ohjaus ----------
 const keys = { up: false, down: false, left: false, right: false, brake: false };
 const keyMap = { ArrowUp: 'up', KeyW: 'up', ArrowDown: 'down', KeyS: 'down', ArrowLeft: 'left', KeyA: 'left', ArrowRight: 'right', KeyD: 'right', Space: 'up', ShiftLeft: 'down', ShiftRight: 'down' };
-addEventListener('keydown', e => { if (keyMap[e.code]) { keys[keyMap[e.code]] = true; e.preventDefault(); } if (e.code === 'KeyR') { if (race.active) startRace(); else resetCar(); } });
+addEventListener('keydown', e => { if (keyMap[e.code]) { keys[keyMap[e.code]] = true; e.preventDefault(); } if (e.code === 'KeyR') { restartMode(); } });
 addEventListener('keyup', e => { if (keyMap[e.code]) keys[keyMap[e.code]] = false; });
 document.querySelectorAll('.btn').forEach(b => {
   const k = b.dataset.k;
@@ -428,7 +429,7 @@ async function startGame(mode) {
   document.getElementById('start').style.display = 'none';
   document.getElementById('results').style.display = 'none';
   paused = false;
-  if (mode === 'race') startRace(); else startFree();
+  if (mode === 'race') startRace(); else if (mode === 'motorway') startMotorway(); else startFree();
   if (!audioCtx) try { audioCtx = new (window.AudioContext || window.webkitAudioContext)(); } catch (e) {}
   if (tilt.started) return;
   tilt.started = true;
@@ -455,7 +456,7 @@ function showMenu() {
   renderCars();
 }
 document.getElementById('menuBtn').addEventListener('click', showMenu);
-document.getElementById('resetBtn').addEventListener('click', () => { if (race.active) startRace(); else resetCar(); calibrate(); });
+document.getElementById('resetBtn').addEventListener('click', () => { restartMode(); calibrate(); });
 
 function updateWheel(dt) {
   const t = wheelDrag ? null : tiltInput();
@@ -511,8 +512,19 @@ function update(dt) {
       else { nx = state.x; nz = state.z; }
     }
   }
-  if (Math.abs(nx) > wallLimit) { nx = Math.sign(nx) * wallLimit; hit = true; }
-  if (Math.abs(nz) > wallLimit) { nz = Math.sign(nz) * wallLimit; hit = true; }
+  if (world === 'city') {
+    if (Math.abs(nx) > wallLimit) { nx = Math.sign(nx) * wallLimit; hit = true; }
+    if (Math.abs(nz) > wallLimit) { nz = Math.sign(nz) * wallLimit; hit = true; }
+  } else {
+    // Moottoritiellä kaiteet: hipaisu hidastaa, mutta ei pysäytä
+    const lat = nx - mwX(nz);
+    const side = lat < 0 ? -1 : 1, a = Math.abs(lat);
+    if (a < MW_INNER || a > MW_OUTER) {
+      nx = mwX(nz) + side * Math.max(MW_INNER, Math.min(MW_OUTER, a));
+      state.speed *= Math.pow(0.4, dt);
+      state.heading += angleDiff(mwHeading(nz) * 180 / Math.PI + (state.speed < 0 ? 180 : 0), state.heading * 180 / Math.PI) * Math.PI / 180 * Math.min(1, dt * 3);
+    }
+  }
   if (hit) state.speed *= -0.25;
   state.x = nx; state.z = nz;
 
@@ -657,27 +669,32 @@ function giveFine(reason, amount) {
 }
 let currentLimit = 40, overTime = 0, speedFineCooldown = 0, lastInter = null;
 function updateRules(dt) {
+  // Kisassa ei tule sakkoja
+  const noFines = race.active;
+  if (world === 'motorway') currentLimit = 120;
   const kx = nearestK(state.x), kz = nearestK(state.z);
   const onNS = Math.abs(state.x - roadLine(kx)) < ROAD / 2;
   const onEW = Math.abs(state.z - roadLine(kz)) < ROAD / 2;
-  if (onNS && !onEW) currentLimit = streetLimit(kx);
-  else if (onEW && !onNS) currentLimit = streetLimit(kz);
+  if (world === 'city') {
+    if (onNS && !onEW) currentLimit = streetLimit(kx);
+    else if (onEW && !onNS) currentLimit = streetLimit(kz);
+  }
   limitEl.textContent = currentLimit;
 
   // Ylinopeus: yli 10 km/h liian lujaa yli 2 sekunnin ajan
   const kmh = Math.abs(state.speed) * 3.6;
   const over = kmh - currentLimit;
-  limitEl.classList.toggle('over', over > 10);
+  limitEl.classList.toggle('over', over > 10 && !noFines);
   speedFineCooldown -= dt;
   if (over > 10) { overTime += dt; } else overTime = 0;
-  if (overTime > 2 && speedFineCooldown <= 0) {
+  if (overTime > 2 && speedFineCooldown <= 0 && !noFines) {
     giveFine('Ylinopeus ' + Math.round(kmh) + ' km/h (rajoitus ' + currentLimit + ')', FINE);
     speedFineCooldown = 10;
   }
 
   // Punaisia päin: auto ajaa risteykseen, kun sen suunnan valo on punainen
-  const inside = onNS && onEW ? interAt(kx, kz) : null;
-  if (inside && inside !== lastInter && inside.hasLight && state.speed > 2) {
+  const inside = world === 'city' && onNS && onEW ? interAt(kx, kz) : null;
+  if (inside && inside !== lastInter && inside.hasLight && state.speed > 2 && !noFines) {
     const axis = Math.abs(Math.sin(state.heading)) > Math.abs(Math.cos(state.heading)) ? 'x' : 'z';
     if (lightState(inside, axis, simTime) === 'red') giveFine('Ajoit päin punaisia', FINE);
   }
@@ -873,6 +890,7 @@ for (const rv of RIVALS) {
 function fmtTime(t) { const m = Math.floor(t / 60), s = t - m * 60; return m + ':' + (s < 10 ? '0' : '') + s.toFixed(1); }
 
 function startRace() {
+  leaveMotorway();
   race.active = true; race.phase = 'countdown'; race.countdown = 3.99; race.t = 0; race.cp = 1;
   race.fines0 = fines.total;
   // Lähtöruudukko: kaksi riviä, kaksi rinnakkain
@@ -894,6 +912,7 @@ function startRace() {
   camInit = false;
 }
 function startFree() {
+  leaveMotorway();
   race.active = false; race.phase = 'off';
   race.rivals.forEach(rv => rv.mesh.visible = false);
   ring.visible = false; arrow.visible = false;
@@ -973,7 +992,6 @@ function updateRace(dt) {
 function finishRace() {
   race.phase = 'finished';
   const pos = race.rivals.filter(rv => rv.finished != null).length + 1;
-  const raceFines = fines.total - race.fines0;
   let best = null, isBest = false;
   try {
     const key = 'ua-best-' + carKey;
@@ -983,14 +1001,177 @@ function finishRace() {
   const medal = ['🥇', '🥈', '🥉', '4.'][pos - 1];
   document.getElementById('resTitle').textContent = medal + ' ' + (pos === 1 ? 'Voitit kisan!' : 'Sija ' + pos + '/' + (race.rivals.length + 1));
   document.getElementById('resText').innerHTML = 'Aika ' + fmtTime(race.t) + ' (' + spec.name + ')' +
-    (best != null ? '<br>' + (isBest ? 'Uusi ennätys! 🎉' : 'Ennätys ' + fmtTime(best)) : '') +
-    '<br>Sakot kisan aikana: ' + raceFines + ' €';
+    (best != null ? '<br>' + (isBest ? 'Uusi ennätys! 🎉' : 'Ennätys ' + fmtTime(best)) : '');
   raceHud.innerHTML = fmtTime(race.t) + ' · Maali!';
   setTimeout(() => { if (race.phase === 'finished') document.getElementById('results').style.display = 'flex'; }, 1200);
 }
 document.getElementById('resAgain').addEventListener('click', () => startGame('race'));
 document.getElementById('resFree').addEventListener('click', () => startGame('free'));
 document.getElementById('resMenu').addEventListener('click', showMenu);
+
+// ---------- Moottoritie (loputon) ----------
+// Moottoritie on kaukana kaupungista, ja sitä rakennetaan pala kerrallaan auton edelle.
+let world = 'city';
+const MW_X0 = 6000;
+const MW_LANES = [-2.6, -6.3];       // oman suunnan kaistat (keskikaiteesta oikealle)
+const MW_INNER = 1.1, MW_OUTER = 8.9; // kaiteiden väli auton keskipisteelle
+const MW_CHUNK = 100, MW_STEP = 5;
+function mwX(z) { return MW_X0 + 40 * Math.sin(z / 500) + 25 * Math.sin(z / 1300); }
+function mwSlope(z) { return 40 / 500 * Math.cos(z / 500) + 25 / 1300 * Math.cos(z / 1300); }
+function mwHeading(z) { return Math.atan(mwSlope(z)); }
+
+const mwGroup = new THREE.Group(); scene.add(mwGroup); mwGroup.visible = false;
+const mwGround = new THREE.Mesh(new THREE.PlaneGeometry(1600, 1600), new THREE.MeshLambertMaterial({ color: 0x6f9f4f }));
+mwGround.rotation.x = -Math.PI / 2; mwGround.position.y = -0.02; mwGround.receiveShadow = true; mwGroup.add(mwGround);
+const mwAsphalt = new THREE.MeshLambertMaterial({ color: 0x404449, side: THREE.DoubleSide });
+const mwWhite = new THREE.MeshBasicMaterial({ color: 0xf2f2f2, side: THREE.DoubleSide });
+const mwConcrete = new THREE.MeshLambertMaterial({ color: 0xb8b8b0, side: THREE.DoubleSide });
+const mwRail = new THREE.MeshLambertMaterial({ color: 0xc9ced4, side: THREE.DoubleSide });
+const treeTrunkMat = new THREE.MeshLambertMaterial({ color: 0x7a5530 });
+const treeMats = [0x3f8f3a, 0x2f6f34, 0x4f9f45].map(c => new THREE.MeshLambertMaterial({ color: c }));
+const pineGeo = new THREE.ConeGeometry(2.2, 7, 7), trunkGeo = new THREE.CylinderGeometry(0.3, 0.4, 2);
+
+// Nauha tien suuntaisesti: lat0..lat1 sivusuunnassa, korkeus y; vertical = pystysuora seinä
+function mwRibbon(z0, z1, lat0, lat1, y0, y1, mat, dash) {
+  const pos = [], idx = [];
+  let n = 0;
+  for (let z = z0; z < z1 - 0.01; z += MW_STEP) {
+    if (dash && Math.floor(z / MW_STEP) % 3 !== 0) continue;
+    const za = z, zb = Math.min(z1, z + (dash ? 3 : MW_STEP));
+    const xa = mwX(za), xb = mwX(zb);
+    // Pystysuora seinä, jos lat0 === lat1
+    pos.push(xa + lat0, y0, za, xa + lat1, y1, za, xb + lat0, y0, zb, xb + lat1, y1, zb);
+    idx.push(n, n + 2, n + 1, n + 1, n + 2, n + 3);
+    n += 4;
+  }
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+  g.setIndex(idx); g.computeVertexNormals();
+  const m = new THREE.Mesh(g, mat); m.receiveShadow = true;
+  return m;
+}
+const mwChunks = new Map();
+function buildChunk(ci) {
+  const g = new THREE.Group();
+  const z0 = ci * MW_CHUNK, z1 = z0 + MW_CHUNK;
+  g.add(mwRibbon(z0, z1, 9.6, -9.6, 0.01, 0.01, mwAsphalt));
+  for (const side of [-1, 1]) {
+    g.add(mwRibbon(z0, z1, side * 8.7, side * 8.5, 0.02, 0.02, mwWhite));          // reunaviiva
+    g.add(mwRibbon(z0, z1, side * 1.0, side * 0.8, 0.02, 0.02, mwWhite));          // keskiviiva
+    g.add(mwRibbon(z0, z1, side * 4.55, side * 4.35, 0.02, 0.02, mwWhite, true));  // kaistaviiva
+    g.add(mwRibbon(z0, z1, side * 9.4, side * 9.4, 0.45, 0.85, mwRail));           // kaide
+  }
+  g.add(mwRibbon(z0, z1, 0.3, 0.3, 0, 0.9, mwConcrete));
+  g.add(mwRibbon(z0, z1, -0.3, -0.3, 0, 0.9, mwConcrete));
+  g.add(mwRibbon(z0, z1, 0.3, -0.3, 0.9, 0.9, mwConcrete));
+  // Puita tien varteen
+  let sd = ci * 7919 + 13;
+  const r = () => { sd = (sd * 16807) % 2147483647; return sd / 2147483647; };
+  for (let i = 0; i < 14; i++) {
+    const z = z0 + r() * MW_CHUNK, side = r() < 0.5 ? -1 : 1, lat = side * (16 + r() * 70);
+    const x = mwX(z) + lat;
+    const crown = new THREE.Mesh(pineGeo, treeMats[i % 3]); crown.position.set(x, 4.5, z); crown.castShadow = true;
+    const trunk = new THREE.Mesh(trunkGeo, treeTrunkMat); trunk.position.set(x, 1, z);
+    g.add(crown, trunk);
+  }
+  // Silta noin joka 1,5 km
+  if (ci % 15 === 7) {
+    const zc = z0 + 50, xc = mwX(zc);
+    const deck = new THREE.Mesh(new THREE.BoxGeometry(40, 1.2, 10), mwConcrete); deck.position.set(xc, 6.5, zc); deck.castShadow = true; g.add(deck);
+    for (const px of [-12, 0, 12]) { const pil = new THREE.Mesh(new THREE.BoxGeometry(1.2, 6, 1.2), mwConcrete); pil.position.set(xc + px, 3, zc); g.add(pil); }
+  }
+  // Rajoitusmerkki joka kilometri
+  if (ci % 10 === 0) {
+    const tex = signMats[120] || (signMats[120] = new THREE.MeshBasicMaterial({ map: makeSignTex(120), transparent: true }));
+    const z = z0 + 20, x = mwX(z) - 11;
+    const sp = new THREE.Mesh(signPoleGeo, poleMat); sp.position.set(x, 1.3, z); g.add(sp);
+    const sg = new THREE.Mesh(signGeo, tex); sg.position.set(x, 2.8, z); sg.rotation.y = Math.PI; sg.scale.setScalar(1.4); g.add(sg);
+  }
+  mwGroup.add(g);
+  mwChunks.set(ci, g);
+}
+function updateChunks() {
+  const c = Math.floor(state.z / MW_CHUNK);
+  for (let i = c - 2; i <= c + 6; i++) if (!mwChunks.has(i)) buildChunk(i);
+  for (const [i, g] of mwChunks) if (i < c - 3 || i > c + 8) {
+    g.traverse(o => { if (o.geometry && o.geometry.type === 'BufferGeometry') o.geometry.dispose(); });
+    mwGroup.remove(g); mwChunks.delete(i);
+  }
+}
+
+// Moottoritien liikenne: samaan suuntaan ja vastaan tulevat
+const mwTraffic = [];
+for (let i = 0; i < 26; i++) {
+  const oncoming = i >= 16;
+  const mesh = makeCar(AI_COLORS[(i * 3) % AI_COLORS.length], false, i % 7 === 0 ? 'van' : 'sedan');
+  mesh.visible = false; mwGroup.add(mesh);
+  mwTraffic.push({ mesh, oncoming, z: 0, lane: 0, speed: 0, want: 0 });
+}
+function placeMwCar(c, ahead) {
+  c.lane = c.oncoming ? -MW_LANES[Math.floor(Math.random() * 2)] : MW_LANES[Math.floor(Math.random() * 2)];
+  c.want = (c.oncoming ? 95 : (Math.abs(c.lane) > 4 ? 82 : 100 + Math.random() * 15)) / 3.6;
+  c.speed = c.want;
+  c.z = state.z + (ahead ? 250 + Math.random() * 300 : -(150 + Math.random() * 100));
+  if (c.oncoming) c.z = state.z + 300 + Math.random() * 400;
+}
+let mwDistance = 0;
+function startMotorway() {
+  leaveCityModes();
+  world = 'motorway';
+  mwGroup.visible = true;
+  const z = 0;
+  Object.assign(state, { x: mwX(z) + MW_LANES[0], z, heading: mwHeading(z), speed: 0, steer: 0 });
+  updateChunks();
+  mwTraffic.forEach((c, i) => { placeMwCar(c, true); c.z = state.z + 40 + i * 35 + Math.random() * 20; c.mesh.visible = true; });
+  mwDistance = 0;
+  raceHud.style.display = 'block';
+  camInit = false;
+}
+function leaveCityModes() {
+  race.active = false; race.phase = 'off';
+  race.rivals.forEach(rv => rv.mesh.visible = false);
+  ring.visible = false; arrow.visible = false; bigmsg.style.display = 'none';
+}
+function leaveMotorway() {
+  if (world !== 'motorway') return;
+  world = 'city'; mwGroup.visible = false;
+  raceHud.style.display = 'none';
+}
+function restartMode() {
+  if (world === 'motorway') startMotorway(); else if (race.active) startRace(); else resetCar();
+}
+function updateMotorway(dt) {
+  if (world !== 'motorway') return;
+  updateChunks();
+  mwGround.position.set(mwX(state.z), -0.02, state.z);
+  if (state.speed > 0) mwDistance += state.speed * dt;
+  for (const c of mwTraffic) {
+    const dir = c.oncoming ? -1 : 1;
+    // Hidasta, jos samalla kaistalla edellä on hitaampi auto tai pelaaja
+    let target = c.want;
+    for (const o of mwTraffic) {
+      if (o === c || o.lane !== c.lane) continue;
+      const gap = (o.z - c.z) * dir;
+      if (gap > 0 && gap < 35) target = Math.min(target, o.speed * (gap < 15 ? 0.8 : 1));
+    }
+    const plat = state.x - mwX(state.z);
+    const pgap = (state.z - c.z) * dir;
+    if (Math.abs(plat - c.lane) < 2.4 && pgap > 0 && pgap < 30) target = Math.min(target, Math.max(0, state.speed * dir) * (pgap < 12 ? 0.7 : 1));
+    c.speed += Math.max(-8 * dt, Math.min(2.5 * dt, target - c.speed));
+    c.z += dir * c.speed * dt;
+    // Kierrätys: kaukana takana tai edessä oleva auto siirretään uudelleen
+    const rel = c.z - state.z;
+    if (rel < -250 || rel > 700) placeMwCar(c, rel < 0 || c.oncoming);
+    const x = mwX(c.z) + c.lane;
+    c.mesh.position.set(x, 0, c.z);
+    c.mesh.rotation.y = mwHeading(c.z) + (c.oncoming ? Math.PI : 0);
+    for (const w of c.mesh.userData.wheels) w.wheel.rotation.x += c.speed * dt / 0.4;
+    // Törmäys pelaajaan
+    const dx = state.x - x, dz = state.z - c.z, d = Math.hypot(dx, dz);
+    if (d < 3.4 && d > 0.001) { state.x = x + dx / d * 3.4; state.z = c.z + dz / d * 3.4; state.speed *= 0.5; }
+  }
+  raceHud.innerHTML = '🛣️ ' + (mwDistance / 1000).toFixed(1) + ' km<small>Moottoritie · rajoitus 120</small>';
+}
 
 // ---------- Kamera ----------
 const camPos = new THREE.Vector3();
@@ -1018,6 +1199,7 @@ function loop(now) {
     updateAI(dt);
     collideAI();
     updateRace(dt);
+    updateMotorway(dt);
     updateLights();
     updateRules(dt);
   }

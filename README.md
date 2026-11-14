@@ -14,11 +14,12 @@ Peli on PWA, joten sen voi lisätä puhelimen kotinäytölle omalla kuvakkeellaa
 ## Pelissä
 
 - Kolme autoa: perheauto (rauhallinen), pakettiauto (hidas) ja urheiluauto (nopea).
-- Kisa: aja reitti tarkistuspisteiden kautta kolmea kilpailijaa vastaan. Paras aika tallentuu autokohtaisesti.
+- Kisa: aja reitti tarkistuspisteiden kautta kolmea kilpailijaa vastaan. Paras aika tallentuu autokohtaisesti. Kisassa ei tule sakkoja.
 
 - Kaupunki, jossa on liikennevaloja ja nopeusrajoituksia (pääkaduilla 60 km/h, muilla 40 km/h).
 - Sakko tulee, jos ajat päin punaisia tai ajat yli 10 km/h ylinopeutta yli 2 sekunnin ajan. Jokainen sakko on 60 €.
 - Kaduilla ajaa muita autoja, jotka pysähtyvät punaisiin valoihin ja kääntyilevät risteyksissä.
+- Moottoritie: loputon moottoritie metsän halki, liikennettä molempiin suuntiin, rajoitus 120 km/h.
 - Peli toimii vain vaakasuunnassa.
 
 ## Ohjaus
